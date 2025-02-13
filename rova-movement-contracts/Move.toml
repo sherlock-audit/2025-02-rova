@@ -1,0 +1,23 @@
+[package]
+name = "rova_sale"
+version = "1.0.0"
+authors = []
+
+[addresses]
+rova_sale_addr = "_"
+withdrawal_addr = "_"
+
+[dev-addresses]
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-core.git"
+rev = "mainnet"
+subdir = "aptos-move/framework/aptos-framework"
+
+[dependencies.MoveStdlib]
+git = "https://github.com/aptos-labs/aptos-core.git"
+subdir = "aptos-move/framework/move-stdlib"
+rev = "main"
+addr_subst = { "std" = "0x1" }
+
+[dev-dependencies]

@@ -65,6 +65,19 @@ For rova-contracts
 For rova-movement-contracts
 
 - This contract only supports first come first serve (FCFS) participation. The backend is expected to provide the correct MOVE payment amount based on token price in MOVE and token purchase amount.
+
+Backend checks before generating the signatures for user participation requests:
+
+- Verify user authentication using access token in request headers
+- Validate user is not blocked previously on Rova and IP geoblocks
+- Ensure user has completed KYC
+- Make sure user address is not sanctioned (Chainalysis API)
+- Project based eligibility check if any (this will be determined by the token sale project)
+- Make sure user has no other pending transactions or reached their allocation limits. This is for better error UX, since the contract expected to have validation to prevent users from crossing their max token allocation as well.
+
+For the purposes of this audit we can assume signer role is trusted. However, the Launch contract handles payment calculation/transfers, manages token allocation per user and allocation limits, and processes refunds and withdrawals so we want to make sure there are no issues or concerns in the logic there. We will use the Launch contract as the source of truth for whether or not a user has successfully participated and funded a token sale, and how much tokens are allocated to them for distribution once vesting starts.
+
+[Signing Requests parameters](https://github.com/dpm-labs/rova-contracts/blob/main/README.md#signing-requests)
 ___
 
 ### Q: What properties/invariants do you want to hold even if breaking them has a low/unknown impact?

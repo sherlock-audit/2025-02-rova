@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.22;
+pragma solidity 0.8.22;
 
 import {UnsafeUpgrades} from "@openzeppelin-foundry-upgrades/Upgrades.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -18,7 +18,7 @@ import {
 
 contract MockERC20 is ERC20 {
     constructor() ERC20("Mock Token", "MTK") {
-        _mint(msg.sender, 1000000 * 10 ** 18);
+        _mint(msg.sender, 1000000 * 10 ** decimals());
     }
 }
 
@@ -43,6 +43,8 @@ abstract contract LaunchTestBase is Test, Launch {
     bytes32 public testLaunchGroupId = "ch72gsb320000udocl363eofy";
     bytes32 public testLaunchParticipationId = "cm6o2sldi00003b74facm5z9n";
     bytes32 public testUserId = "cm6o2tm1300003b74dsss1s7q";
+
+    uint8 public testTokenDecimals = 18;
 
     function _setUpLaunch() public {
         vm.startPrank(admin.addr);
@@ -72,7 +74,7 @@ abstract contract LaunchTestBase is Test, Launch {
         returns (LaunchGroupSettings memory)
     {
         CurrencyConfig memory currencyConfig =
-            CurrencyConfig({tokenPriceBps: 1 * 10 ** currency.decimals(), isEnabled: true});
+            CurrencyConfig({tokenPriceBps: uint248(1 * 10 ** currency.decimals()), isEnabled: true});
         LaunchGroupSettings memory settings = LaunchGroupSettings({
             finalizesAtParticipation: false,
             startsAt: block.timestamp,
@@ -183,7 +185,9 @@ abstract contract LaunchTestBase is Test, Launch {
         address proxyAddress = UnsafeUpgrades.deployTransparentProxy(
             address(new Launch()),
             adminAddress,
-            abi.encodeWithSelector(Launch.initialize.selector, withdrawalAddress, testLaunchId, adminAddress, 18)
+            abi.encodeWithSelector(
+                Launch.initialize.selector, withdrawalAddress, testLaunchId, adminAddress, testTokenDecimals
+            )
         );
         launch = Launch(proxyAddress);
     }

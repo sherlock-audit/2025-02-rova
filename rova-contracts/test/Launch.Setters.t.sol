@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.22;
+pragma solidity 0.8.22;
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Test} from "forge-std/Test.sol";
@@ -13,13 +13,28 @@ contract LaunchTest is Test, Launch, LaunchTestBase {
     }
 
     /**
+     * @notice Test setLaunchId
+     */
+    function test_SetLaunchId() public {
+        bytes32 prevLaunchId = launch.launchId();
+        bytes32 newLaunchId = bytes32(uint256(1));
+        vm.startPrank(manager);
+        vm.expectEmit(true, true, true, true);
+        emit LaunchIdUpdated(newLaunchId, prevLaunchId);
+        // Set launch ID
+        launch.setLaunchId(newLaunchId);
+
+        assertEq(launch.launchId(), newLaunchId);
+    }
+
+    /**
      * @notice Test setLaunchGroupSettings
      */
     function test_SetLaunchGroupSettings() public {
         LaunchGroupSettings memory settings = _setupLaunchGroup();
         settings.minTokenAmountPerUser = 1000 * 10 ** launch.tokenDecimals();
         settings.maxTokenAmountPerUser = 10000 * 10 ** launch.tokenDecimals();
-        settings.maxTokenAllocation = 1000000;
+        settings.maxTokenAllocation = 1000000 * 10 ** launch.tokenDecimals();
         settings.startsAt = block.timestamp + 1 days;
         settings.endsAt = block.timestamp + 2 days;
 
@@ -54,6 +69,29 @@ contract LaunchTest is Test, Launch, LaunchTestBase {
         vm.expectRevert(InvalidRequest.selector);
         // Setup launch group
         launch.setLaunchGroupSettings("differentLaunchGroupId", settings);
+    }
+
+    function test_RevertIf_SetLaunchGroupSettings_InvalidRequestInvalidPeriod() public {
+        LaunchGroupSettings memory settings = _setupLaunchGroup();
+        settings.startsAt = block.timestamp + 2 days;
+        settings.endsAt = block.timestamp + 1 days;
+
+        vm.startPrank(manager);
+        vm.expectRevert(InvalidRequest.selector);
+        // Set launch group settings
+        launch.setLaunchGroupSettings(testLaunchGroupId, settings);
+    }
+
+    function test_RevertIf_SetLaunchGroupSettings_InvalidRequestMinTokenAmountPerUserGreaterThanMaxTokenAmountPerUser()
+        public
+    {
+        LaunchGroupSettings memory settings = _setupLaunchGroup();
+        settings.minTokenAmountPerUser = settings.maxTokenAmountPerUser + 1;
+
+        vm.startPrank(manager);
+        vm.expectRevert(InvalidRequest.selector);
+        // Set launch group settings
+        launch.setLaunchGroupSettings(testLaunchGroupId, settings);
     }
 
     function test_RevertIf_SetLaunchGroupSettings_InvalidRequestFinalizesAtParticipation() public {

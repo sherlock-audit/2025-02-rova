@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.22;
+pragma solidity 0.8.22;
 
 /// @notice The status of a launch group.
 enum LaunchGroupStatus {
@@ -31,7 +31,7 @@ struct LaunchGroupSettings {
 /// @param tokenPriceBps The price of the sale token in this currency in basis points.
 /// @param isEnabled Whether this currency is accepted.
 struct CurrencyConfig {
-    uint256 tokenPriceBps;
+    uint248 tokenPriceBps;
     bool isEnabled;
 }
 

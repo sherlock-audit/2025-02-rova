@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.22;
+pragma solidity 0.8.22;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {AccessControlEnumerableUpgradeable} from
@@ -86,8 +86,6 @@ contract Launch is
     EnumerableMap.AddressToUintMap internal _withdrawableAmountByCurrency;
 
     error InvalidRequest();
-    error InvalidCurrency(bytes32 launchGroupId, address currency);
-    error InvalidCurrencyAmount(bytes32 launchGroupId, address currency, uint256 currencyAmount);
     error InvalidSignature();
     error ExpiredRequest(uint256 requestExpiresAt, uint256 currentTime);
     error ParticipationAlreadyExists(bytes32 launchParticipationId);
@@ -109,6 +107,14 @@ contract Launch is
     error LaunchGroupFinalizesAtParticipation(bytes32 launchGroupId);
     error InvalidWinner(bytes32 launchParticipationId, bytes32 userId);
     error InvalidWithdrawalAmount(uint256 expectedBalance, uint256 actualBalance);
+
+    /// @notice Event for initialize
+    event Initialized(
+        address indexed initialAdmin, address indexed withdrawalAddress, bytes32 indexed launchId, uint8 tokenDecimals
+    );
+
+    /// @notice Event for launch ID update
+    event LaunchIdUpdated(bytes32 indexed launchId, bytes32 indexed prevLaunchId);
 
     /// @notice Event for launch group creation
     event LaunchGroupCreated(bytes32 indexed launchGroupId);
@@ -190,6 +196,14 @@ contract Launch is
         if (_initialAdmin == address(0) || _withdrawalAddress == address(0)) {
             revert InvalidRequest();
         }
+        // Validate token decimals are less than or equal to 18
+        if (_tokenDecimals > 18) {
+            revert InvalidRequest();
+        }
+        // Validate launch ID is not zero
+        if (_launchId == bytes32(0)) {
+            revert InvalidRequest();
+        }
 
         // Grant initial admin default admin, manager, operator, and signer roles
         _grantRole(DEFAULT_ADMIN_ROLE, _initialAdmin);
@@ -205,6 +219,8 @@ contract Launch is
         withdrawalAddress = _withdrawalAddress;
         launchId = _launchId;
         tokenDecimals = _tokenDecimals;
+
+        emit Initialized(_initialAdmin, _withdrawalAddress, _launchId, _tokenDecimals);
     }
 
     /// @notice Participate in a launch group
@@ -231,7 +247,7 @@ contract Launch is
         _validateRequestSignature(keccak256(abi.encode(request)), signature);
 
         // Validate payment currency is enabled for launch group
-        uint256 tokenPriceBps = _validateCurrency(request.launchGroupId, request.currency);
+        uint248 tokenPriceBps = _validateCurrency(request.launchGroupId, request.currency);
 
         // Do not allow replay of launch participation ID
         if (launchGroupParticipations[request.launchParticipationId].userId != bytes32(0)) {
@@ -325,11 +341,15 @@ contract Launch is
         // Validate request signature is from signer role
         _validateRequestSignature(keccak256(abi.encode(request)), signature);
         // Validate payment currency is enabled for launch group
-        uint256 tokenPriceBps = _validateCurrency(request.launchGroupId, request.currency);
+        uint248 tokenPriceBps = _validateCurrency(request.launchGroupId, request.currency);
 
         ParticipationInfo storage prevInfo = launchGroupParticipations[request.prevLaunchParticipationId];
         // If launch group finalizes at participation, the participation is considered complete and not updatable
         if (settings.finalizesAtParticipation || prevInfo.isFinalized) {
+            revert ParticipationUpdatesNotAllowed(request.launchGroupId, request.prevLaunchParticipationId);
+        }
+        // Do not allow updates to cancelled participation
+        if (prevInfo.tokenAmount == 0 || prevInfo.currencyAmount == 0) {
             revert ParticipationUpdatesNotAllowed(request.launchGroupId, request.prevLaunchParticipationId);
         }
 
@@ -349,33 +369,31 @@ contract Launch is
         (, uint256 userTokenAmount) = userTokens.tryGet(request.userId);
         // If new requested token amount is less than old amount, handle refund
         if (prevInfo.currencyAmount > newCurrencyAmount) {
-            // Calculate refund amount
-            uint256 refundCurrencyAmount = prevInfo.currencyAmount - newCurrencyAmount;
             // Validate user new requested token amount is greater than min token amount per user
-            if (userTokenAmount - refundCurrencyAmount < settings.minTokenAmountPerUser) {
+            if (request.tokenAmount < settings.minTokenAmountPerUser) {
                 revert MinUserTokenAllocationNotReached(
                     request.launchGroupId, request.userId, userTokenAmount, request.tokenAmount
                 );
             }
-            // Update total tokens requested for user for launch group
-            userTokens.set(request.userId, userTokenAmount - refundCurrencyAmount);
+
+            // Calculate refund amount
+            uint256 refundCurrencyAmount = prevInfo.currencyAmount - newCurrencyAmount;
             // Transfer payment currency from contract to user
             IERC20(request.currency).safeTransfer(msg.sender, refundCurrencyAmount);
         } else if (newCurrencyAmount > prevInfo.currencyAmount) {
-            // Calculate additional payment amount
-            uint256 additionalCurrencyAmount = newCurrencyAmount - prevInfo.currencyAmount;
             // Validate user new requested token amount is within launch group user allocation limits
-            if (userTokenAmount + additionalCurrencyAmount > settings.maxTokenAmountPerUser) {
+            if (request.tokenAmount > settings.maxTokenAmountPerUser) {
                 revert MaxUserTokenAllocationReached(
                     request.launchGroupId, request.userId, userTokenAmount, request.tokenAmount
                 );
             }
-            // Update total tokens requested for user for launch group
-            userTokens.set(request.userId, userTokenAmount + additionalCurrencyAmount);
+            // Calculate additional payment amount
+            uint256 additionalCurrencyAmount = newCurrencyAmount - prevInfo.currencyAmount;
             // Transfer payment currency from user to contract
             IERC20(request.currency).safeTransferFrom(msg.sender, address(this), additionalCurrencyAmount);
         }
-
+        // Update total tokens requested for user for launch group
+        userTokens.set(request.userId, request.tokenAmount);
         // Set participation details for user
         newInfo.currencyAmount = newCurrencyAmount;
         newInfo.currency = request.currency;
@@ -425,31 +443,22 @@ contract Launch is
         if (info.isFinalized) {
             revert ParticipationUpdatesNotAllowed(request.launchGroupId, request.launchParticipationId);
         }
+        // Do not allow updates to cancelled participation
+        if (info.tokenAmount == 0 || info.currencyAmount == 0) {
+            revert ParticipationUpdatesNotAllowed(request.launchGroupId, request.launchParticipationId);
+        }
 
         // Validate userId is the same which also checks if participation exists
         if (request.userId != info.userId) {
             revert UserIdMismatch(info.userId, request.userId);
         }
 
-        // Get total tokens requested for user for launch group
-        EnumerableMap.Bytes32ToUintMap storage userTokens = _userTokensByLaunchGroup[request.launchGroupId];
-        (, uint256 userTokenAmount) = userTokens.tryGet(request.userId);
-        if (userTokenAmount - info.tokenAmount == 0) {
-            // If total tokens requested for user is the same as the cancelled participation, remove user from launch group
-            userTokens.remove(request.userId);
-        } else if (userTokenAmount - info.tokenAmount < settings.minTokenAmountPerUser) {
-            // Total tokens requested for user after cancellation must be greater than min token amount per user
-            revert MinUserTokenAllocationNotReached(
-                request.launchGroupId, request.userId, userTokenAmount, info.tokenAmount
-            );
-        } else {
-            // Subtract cancelled participation token amount from total tokens requested for user
-            userTokens.set(request.userId, userTokenAmount - info.tokenAmount);
-        }
-
         // Transfer payment currency from contract to user
         uint256 refundCurrencyAmount = info.currencyAmount;
         IERC20(info.currency).safeTransfer(info.userAddress, refundCurrencyAmount);
+
+        // Remove user requested token amount from launch group
+        _userTokensByLaunchGroup[request.launchGroupId].remove(request.userId);
 
         // Reset participation info
         info.tokenAmount = 0;
@@ -501,8 +510,8 @@ contract Launch is
     /// @param launchParticipationIds Launch participation ids to process refunds for
     function batchRefund(bytes32 launchGroupId, bytes32[] calldata launchParticipationIds)
         external
-        onlyRole(OPERATOR_ROLE)
         nonReentrant
+        onlyRole(OPERATOR_ROLE)
         whenNotPaused
         onlyLaunchGroupStatus(launchGroupId, LaunchGroupStatus.COMPLETED)
     {
@@ -521,8 +530,8 @@ contract Launch is
     /// @param winnerLaunchParticipationIds Launch participation ids to finalize as winners
     function finalizeWinners(bytes32 launchGroupId, bytes32[] calldata winnerLaunchParticipationIds)
         external
-        onlyRole(OPERATOR_ROLE)
         nonReentrant
+        onlyRole(OPERATOR_ROLE)
         onlyLaunchGroupStatus(launchGroupId, LaunchGroupStatus.ACTIVE)
     {
         // Validate launch group does not finalize at participation
@@ -593,7 +602,7 @@ contract Launch is
     }
 
     /// @notice Calculate currency payment amount based on bps and token amount
-    function _calculateCurrencyAmount(uint256 tokenPriceBps, uint256 tokenAmount) internal view returns (uint256) {
+    function _calculateCurrencyAmount(uint248 tokenPriceBps, uint256 tokenAmount) internal view returns (uint256) {
         return Math.mulDiv(tokenPriceBps, tokenAmount, 10 ** tokenDecimals);
     }
 
@@ -663,7 +672,7 @@ contract Launch is
 
     /// @notice Validate payment currency is enabled for a launch group
     /// @dev This returns the token price bps for the currency to reduce reads to calculate required currency amount
-    function _validateCurrency(bytes32 _launchGroupId, address _currency) private view returns (uint256) {
+    function _validateCurrency(bytes32 _launchGroupId, address _currency) private view returns (uint248) {
         CurrencyConfig memory currencyConfig = _launchGroupCurrencies[_launchGroupId][_currency];
         if (!currencyConfig.isEnabled) {
             revert InvalidRequest();
@@ -674,6 +683,16 @@ contract Launch is
     /// @notice Validate currency config
     function _validateCurrencyConfig(CurrencyConfig calldata currencyConfig) private pure {
         if (currencyConfig.tokenPriceBps == 0) {
+            revert InvalidRequest();
+        }
+    }
+
+    /// @notice Validate launch group settings
+    function _validateLaunchGroupSettings(LaunchGroupSettings calldata settings) private pure {
+        if (settings.startsAt >= settings.endsAt) {
+            revert InvalidRequest();
+        }
+        if (settings.minTokenAmountPerUser > settings.maxTokenAmountPerUser) {
             revert InvalidRequest();
         }
     }
@@ -705,6 +724,10 @@ contract Launch is
         if (_launchGroups.contains(launchGroupId)) {
             revert InvalidRequest();
         }
+
+        // Validate launch group settings
+        _validateLaunchGroupSettings(settings);
+
         // Validate initial currency config
         _validateCurrencyConfig(initialCurrencyConfig);
 
@@ -755,6 +778,9 @@ contract Launch is
         if (!_launchGroups.contains(launchGroupId)) {
             revert InvalidRequest();
         }
+        // Validate launch group settings
+        _validateLaunchGroupSettings(settings);
+
         // Validate status transition
         LaunchGroupSettings memory prevSettings = launchGroupSettings[launchGroupId];
         _validateStatusTransition(prevSettings.status, settings.status);
@@ -774,7 +800,9 @@ contract Launch is
     /// @notice Set launch identifier
     /// @dev This will typically not be used unless there is a mistake during launch creation
     function setLaunchId(bytes32 _launchId) external onlyRole(MANAGER_ROLE) {
+        bytes32 prevLaunchId = launchId;
         launchId = _launchId;
+        emit LaunchIdUpdated(launchId, prevLaunchId);
     }
 
     /// @notice Set launch group status

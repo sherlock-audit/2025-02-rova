@@ -30,6 +30,8 @@ module rova_sale_addr::rova_sale {
     const EINVALID_SALE_PERIOD: u64 = 7;
     /// Unsupported role type
     const EUNSUPPORTED_ROLE_TYPE: u64 = 8;
+    /// Invalid function input
+    const EINVALID_FUNCTION_INPUT: u64 = 9;
 
     // ================================= Constants ================================= //
 
@@ -130,8 +132,13 @@ module rova_sale_addr::rova_sale {
         token_amount: u64,
         payment_amount: u64
     ) acquires SaleConfig, Roles {
+        // Validate inputs
+        assert!(token_amount > 0, error::invalid_argument(EINVALID_FUNCTION_INPUT));
+        assert!(payment_amount > 0, error::invalid_argument(EINVALID_FUNCTION_INPUT));
+        assert!(public_key_bytes.length() == 32 && public_key_bytes != vector::empty<u8>(), error::invalid_argument(EINVALID_FUNCTION_INPUT));
+
         let user_addr = signer::address_of(user);
-        let sale_config = borrow_global<SaleConfig>(@rova_sale_addr);
+        let sale_config = borrow_global_mut<SaleConfig>(@rova_sale_addr);
 
         // Verify sale is active
         let time_now = timestamp::now_seconds();
@@ -142,7 +149,7 @@ module rova_sale_addr::rova_sale {
 
         // Verify launch participation id hasn't been used (prevent replay)
         assert!(
-            !has_launch_participation_id(launch_participation_id),
+            !table::contains(&sale_config.launch_participation_registry, launch_participation_id),
             error::invalid_argument(EINVALID_LAUNCH_PARTICIPATION_ID)
         );
         
@@ -174,7 +181,6 @@ module rova_sale_addr::rova_sale {
         aptos_account::deposit_coins(@rova_sale_addr, coin);
 
         // Register launch_participation_id as used
-        let sale_config = borrow_global_mut<SaleConfig>(@rova_sale_addr);
         table::add(&mut sale_config.launch_participation_registry, launch_participation_id, true);
 
         // Emit funding event
@@ -191,7 +197,10 @@ module rova_sale_addr::rova_sale {
     public entry fun withdraw(
         caller: &signer,
         amount: u64
-    ) acquires SaleConfig {        
+    ) acquires SaleConfig {
+        // Validate inputs
+        assert!(amount > 0, error::invalid_argument(EINVALID_FUNCTION_INPUT));
+
         // Verify caller is admin
         only_admin(caller);
 
@@ -213,7 +222,10 @@ module rova_sale_addr::rova_sale {
     public entry fun set_withdrawal_address(
         caller: &signer,
         new_address: address
-    ) acquires Roles, SaleConfig {        
+    ) acquires Roles, SaleConfig {
+        // Validate not zero address
+        assert!(new_address != @0x0, error::invalid_argument(EINVALID_FUNCTION_INPUT));
+
         // Verify caller has withdrawal role
         let roles = borrow_global_mut<Roles>(@rova_sale_addr);
         only_role(caller, roles.withdrawal_role);
@@ -302,16 +314,7 @@ module rova_sale_addr::rova_sale {
             abort error::invalid_argument(EUNSUPPORTED_ROLE_TYPE)
         };
 
-        manage_role_vector(role_vec, addr_to_manage, is_add);
-
-        // Emit role change event
-        event::emit(
-            RoleChangeEvent {
-                role_type,
-                address: addr_to_manage,
-                is_added: is_add
-            }
-        );
+        manage_role_vector(role_type, role_vec, addr_to_manage, is_add);
     }
 
     // ================================= View Functions ================================= //
@@ -390,17 +393,39 @@ module rova_sale_addr::rova_sale {
     }
 
     fun manage_role_vector(
+        role_type: u8,
         role_vec: &mut vector<address>,
         addr_to_manage: address,
         is_add: bool
     ) {
+        if (!is_add && vector::length(role_vec) == 1) {
+            abort error::invalid_state(EUNSUPPORTED_ROLE_TYPE);
+        };
+
         let (found, index) = vector::index_of(role_vec, &addr_to_manage);
         if (is_add) {
             if (!found) {
                 vector::push_back(role_vec, addr_to_manage);
+                // Emit role change event
+                event::emit(
+                    RoleChangeEvent {
+                        role_type,
+                        address: addr_to_manage,
+                        is_added: true
+                    }
+                );
             };
+
         } else if (found) {
             vector::remove(role_vec, index);
+            // Emit role change event
+            event::emit(
+                RoleChangeEvent {
+                    role_type,
+                    address: addr_to_manage,
+                    is_added: false
+                }
+            );
         };
     }
 

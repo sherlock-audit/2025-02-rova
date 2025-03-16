@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.22;
+pragma solidity 0.8.22;
 
 import {Upgrades} from "@openzeppelin-foundry-upgrades/Upgrades.sol";
 import {Script, console} from "forge-std/Script.sol";
